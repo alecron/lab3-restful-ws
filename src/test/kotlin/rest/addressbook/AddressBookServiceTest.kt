@@ -2,6 +2,7 @@ package rest.addressbook
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
@@ -39,6 +40,11 @@ class AddressBookServiceTest {
         // Verify that GET /contacts is well implemented by the service, i.e
         // complete the test to ensure that it is safe and idempotent
         //////////////////////////////////////////////////////////////////////
+
+        // GET /contacts - safe and idempotent
+        // Before the request, personList is empty. To check that it is safe and
+        // idempotent it should remain empty after the request.
+        assert(addressBook.personList.isEmpty())
     }
 
     @Test
@@ -73,6 +79,22 @@ class AddressBookServiceTest {
         // Verify that POST /contacts is well implemented by the service, i.e
         // complete the test to ensure that it is not safe and not idempotent
         //////////////////////////////////////////////////////////////////////
+
+        // POST /contacts - not safe nor idempotent
+        // After the POST request, addressBook's state has been modified, so it's not safe.
+        // To check idempotency I will repeat the PUT request. After that, it should have
+        // two instances of the same name, so it would be a different state, and it
+        // would not be idempotent.
+        // Not safe:
+        // Before the request the list was empty, now it should have 1 person
+        assertEquals(addressBook.personList.size, 1)
+        // Not idempotent:
+        // Repeating the request leads to a new state
+        var sizeOfJuanBefore =  addressBook.personList.filter { person -> person.name == "Juan" }.size
+        restTemplate.postForEntity("http://localhost:$port/contacts", juan, Person::class.java)
+        var sizeOfJuanAfter = addressBook.personList.filter { person -> person.name == "Juan" }.size
+        assertEquals(sizeOfJuanBefore, 1)
+        assertEquals(sizeOfJuanAfter, 2)
     }
 
     @Test
@@ -103,6 +125,8 @@ class AddressBookServiceTest {
         assertEquals(3, mariaUpdated?.id)
         assertEquals(mariaURI, mariaUpdated?.href)
 
+        var personListBeforeGet = addressBook.personList.toMutableList()
+
         // Check that the new user exists
         response = restTemplate.getForEntity(mariaURI, Person::class.java)
 
@@ -117,6 +141,11 @@ class AddressBookServiceTest {
         // Verify that GET /contacts/person/3 is well implemented by the service, i.e
         // complete the test to ensure that it is safe and idempotent
         //////////////////////////////////////////////////////////////////////
+
+        // GET /contacts/person/3 - safe and idempotent
+        // Check that personList remains the same before and after the GET request
+        // NOTE: The method .toMutableList() creates a copy of the list, not a pointer
+        assertEquals(personListBeforeGet, addressBook.personList)
     }
 
     @Test
@@ -127,6 +156,8 @@ class AddressBookServiceTest {
         val juan = Person(name = "Juan", id = addressBook.nextId())
         addressBook.personList.add(salvador)
         addressBook.personList.add(juan)
+
+        var personListBeforeGet = addressBook.personList.toMutableList()
 
         // Test list of contacts
         val response = restTemplate.getForEntity("http://localhost:$port/contacts", Array<Person>::class.java)
@@ -139,6 +170,12 @@ class AddressBookServiceTest {
         // Verify that GET /contacts is well implemented by the service, i.e
         // complete the test to ensure that it is safe and idempotent
         //////////////////////////////////////////////////////////////////////
+
+        // GET /contacts - safe and idempotent
+        // Once again, I'm comparing personList before the request with
+        // personList after the request
+        assertEquals(personListBeforeGet, addressBook.personList)
+
     }
 
     @Test
@@ -153,8 +190,12 @@ class AddressBookServiceTest {
         // Update Maria
         val maria = Person(name = "Maria")
 
+        var personListBeforePost = addressBook.personList.toMutableList()
+
         var response = restTemplate.exchange(juanURI, HttpMethod.PUT, HttpEntity(maria), Person::class.java)
         assertEquals(204, response.statusCode.value())
+
+        var personListAfterPost = addressBook.personList.toMutableList()
 
         // Verify that the update is real
         response = restTemplate.getForEntity(juanURI, Person::class.java)
@@ -178,6 +219,17 @@ class AddressBookServiceTest {
         // Verify that PUT /contacts/person/2 is well implemented by the service, i.e
         // complete the test to ensure that it is idempotent but not safe
         //////////////////////////////////////////////////////////////////////
+
+        // PUT /contacts/person/2 - idempotent and not safe.
+        // Not safe: After the request, addressBook should have changed its state.
+        assertNotEquals(personListAfterPost, personListBeforePost)
+        // Idempotent: Same request gives the same state
+        restTemplate.exchange(juanURI, HttpMethod.PUT, HttpEntity(maria), Person::class.java)
+        var responseCheck = restTemplate.getForEntity(juanURI, Person::class.java)
+        val updatedMariaCheck = responseCheck.body
+        assertEquals(maria.name, updatedMariaCheck?.name)
+        assertEquals(2, updatedMariaCheck?.id)
+        assertEquals(juanURI, updatedMariaCheck?.href)
     }
 
     @Test
@@ -199,6 +251,15 @@ class AddressBookServiceTest {
         // Verify that DELETE /contacts/person/2 is well implemented by the service, i.e
         // complete the test to ensure that it is idempotent but not safe
         //////////////////////////////////////////////////////////////////////
+
+        // DELETE /contacts/person/2 - idempotent and not safe.
+        // Not safe: addressBook should have changed its state by not containing a person named "Juan".
+        assertEquals(addressBook.personList.filter{ person -> person.name == "Juan"}.size, 0)
+
+        // Idempotent: Repeating the same request should return the same state (addressBook not containing
+        // a person named "Juan")
+        restTemplate.execute(juanURI, HttpMethod.DELETE, {}, {})
+        assertEquals(addressBook.personList.filter{ person -> person.name == "Juan"}.size, 0)
     }
 
     @Test
